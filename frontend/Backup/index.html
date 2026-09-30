@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BEM-Copilot Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <style>
+        .tabs { display: flex; gap: 5px; margin-bottom: 10px; flex-wrap: wrap; }
+        .tab-btn { padding: 5px 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; cursor: pointer; border-radius: 4px; }
+        .tab-btn.active { background: #00ff88; color: black; font-weight: bold; }
+        .cad-container { position: relative; width: 100%; min-height: 300px; background: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; overflow: hidden; margin-bottom: 5px; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
+        .editor-tools { display: flex; gap: 5px; margin-bottom: 10px; flex-wrap: wrap; }
+        .tool-btn { padding: 4px 8px; font-size: 0.85em; background: #2c2c2c; border: 1px solid #444; color: white; border-radius: 4px; cursor: pointer; }
+        .tool-btn.active { background: #00aaff; border-color: #0088cc; font-weight: bold; }
+        .dashboard-container { grid-template-columns: 450px 1fr; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar Input Panel -->
+        <div class="glass-panel input-panel" style="overflow-y: auto; max-height: 95vh;">
+            <h2>BEM-Copilot Setup</h2>
+            
+            <div id="step-1">
+                <h3>Step 1: Floor Geometry</h3>
+                <div class="tabs" id="floor-tabs">
+                    <!-- Tabs dynamically generated -->
+                </div>
+                <div class="editor-tools">
+                    <button type="button" id="add-floor-btn" class="tab-btn">+ Add Floor</button>
+                    <button type="button" id="remove-floor-btn" class="tab-btn" style="background: rgba(255,50,50,0.3);">Remove Active</button>
+                </div>
+                
+                <div class="input-group">
+                    <label>Upload Plan for <span id="active-floor-label">Floor 0</span></label>
+                    <input type="file" id="floor-plan-upload" accept="image/*">
+                    <button type="button" id="extract-geom-btn" style="margin-top: 10px; padding: 5px 10px; font-size: 0.9em;">🔬 Extract Geometry (AI + CV)</button>
+                    <div class="spinner" id="extract-spinner" style="display:none; width:15px; height:15px; margin-left: 10px; vertical-align: middle;"></div>
+                </div>
+
+                <!-- Extraction step status -->
+                <div id="extract-status" style="display:none; margin-bottom:10px; font-size:0.82em; color:#aaa;">
+                    <div id="extract-step-1" style="padding:3px 0;">⏳ Step 1: Running SegFormer semantic segmentation…</div>
+                    <div id="extract-step-2" style="padding:3px 0; color:#666;">⏸ Step 2: Vectorizing contours (OpenCV)…</div>
+                    <div id="extract-step-3" style="padding:3px 0; color:#666;">⏸ Step 3: Naming zones with Gemini…</div>
+                </div>
+
+                <!-- Two-step visual preview -->
+                <div id="extract-preview" style="display:none; margin-bottom:10px;">
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <div style="flex:1; min-width:160px;">
+                            <p style="font-size:0.75em; color:#aaa; margin:0 0 4px;">Step 1 — Coloured Zones</p>
+                            <img id="colored-plan-preview" src="" alt="Coloured zones" style="width:100%; border-radius:6px; border:1px solid rgba(255,255,255,0.15);">
+                        </div>
+                        <div style="flex:1; min-width:160px;">
+                            <p style="font-size:0.75em; color:#aaa; margin:0 0 4px;">Step 2 — Vector Polygons</p>
+                            <img id="vector-plan-preview" src="" alt="Vector polygons" style="width:100%; border-radius:6px; border:1px solid rgba(255,255,255,0.15);">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="editor-tools">
+                    <button type="button" class="tool-btn active" data-tool="select">Select</button>
+                    <button type="button" class="tool-btn" data-tool="draw">Draw Zone</button>
+                    <button type="button" class="tool-btn" data-tool="delete">Delete Zone</button>
+                    <button type="button" class="tool-btn" data-tool="combine">Combine</button>
+                    <button type="button" class="tool-btn" data-tool="split">Split</button>
+                    <button type="button" class="tool-btn" id="auto-snap-btn" style="background: #e67e22; border-color: #d35400;">🧲 Auto-Snap</button>
+                </div>
+
+                <div class="cad-container">
+                    <canvas id="cad-canvas"></canvas>
+                </div>
+                <p id="tool-hint" style="font-size: 0.8em; color: #ccc; margin-top: -5px; margin-bottom: 15px;">Drag vertices to adjust zone boundaries.</p>
+            </div>
+
+            <hr style="border-color: rgba(255,255,255,0.1); margin-bottom: 20px;">
+
+            <div id="step-2">
+                <h3>Step 2: Physics Parameters</h3>
+                <form id="simulation-form">
+                    <div class="input-group">
+                        <label for="facade">Facade Image</label>
+                        <input type="file" id="facade" name="facade" accept="image/*" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="wwr_override">WWR Override (0 to AI Auto)</label>
+                        <input type="number" id="wwr_override" name="wwr_override" step="0.05" min="0" max="0.9" value="0">
+                    </div>
+
+                    <div class="input-group">
+                        <label for="roof_shape">Roof Shape Override (AI Auto if blank)</label>
+                        <select id="roof_shape" name="roof_shape">
+                            <option value="">Auto (from Facade)</option>
+                            <option value="Flat">Flat</option>
+                            <option value="Gable">Gable</option>
+                            <option value="Hip">Hip</option>
+                        </select>
+                    </div>
+
+                    <div style="display:flex; gap:10px;">
+                        <div class="input-group" style="flex:1;">
+                            <label for="u_wall_override">Wall U-Value (0 = Auto)</label>
+                            <input type="number" id="u_wall_override" name="u_wall_override" step="0.01" min="0" max="5.0" value="0">
+                        </div>
+                        <div class="input-group" style="flex:1;">
+                            <label for="u_window_override">Window U-Value (0 = Auto)</label>
+                            <input type="number" id="u_window_override" name="u_window_override" step="0.01" min="0" max="5.0" value="0">
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:10px;">
+                        <div class="input-group" style="flex:1;">
+                            <label for="ceiling_height">Ceiling Height (m)</label>
+                            <input type="number" id="ceiling_height" name="ceiling_height" step="0.1" min="2.0" max="10.0" value="3.5">
+                        </div>
+                        <div class="input-group" style="flex:1;">
+                            <label for="rotation_angle">Building Rotation (?)</label>
+                            <input type="range" id="rotation_angle" name="rotation_angle" min="0" max="360" value="0" style="width:100%;" oninput="document.getElementById('rot_val').innerText = this.value + '?';">
+                            <div style="text-align:right; font-size:0.8em; color:#ccc;" id="rot_val">0?</div>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="standard">Desired Standard</label>
+                        <select id="standard" name="standard">
+                            <option value="Baseline">Baseline (No Renovation)</option>
+                            <option value="DIN18599 (GEG)">DIN18599 (GEG Compliance)</option>
+                            <option value="Passivhaus">Passivhaus (Deep Retrofit)</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="hvac">HVAC System Type</label>
+                        <select id="hvac" name="hvac">
+                            <option value="District Heating">District Heating</option>
+                            <option value="Heat Pump (Air-Source)">Heat Pump (Air-Source)</option>
+                            <option value="Heat Pump (Geothermal)">Heat Pump (Geothermal)</option>
+                            <option value="Gas Boiler">Gas Boiler</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="city">Location (City)</label>
+                        <input type="text" id="city" name="city" value="Hannover, Germany" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="building_type">General Building Type</label>
+                        <select id="building_type" name="building_type">
+                            <option value="Residential">Residential</option>
+                            <option value="Office">Office / Commercial</option>
+                            <option value="Educational">Educational (School/University)</option>
+                            <option value="Healthcare">Healthcare</option>
+                            <option value="Retail">Retail</option>
+                            <option value="Industrial">Industrial</option>
+                            <option value="Hospitality">Hospitality (Hotel/Restaurant)</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" id="simulate-btn">
+                        <span>Run AI Simulation</span>
+                        <div class="spinner" id="btn-spinner" style="display:none;"></div>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Output Panel -->
+        <div class="glass-panel output-panel" style="overflow-y: auto; max-height: 95vh;">
+            <h2>
+                Simulation Results 
+                <span id="building-category" class="category-badge hidden"></span>
+            </h2>
+            
+            <div id="error-banner" class="hidden" style="background: rgba(255,50,50,0.2); color: #ff5555; padding: 15px; border-radius: 8px; border: 1px solid rgba(255,50,50,0.5); margin-bottom: 20px;">
+                <strong>Error:</strong> <span id="error-message-text"></span>
+            </div>
+            
+            <div id="loading-state" class="hidden">
+                <div class="glow-spinner"></div>
+                <p>Orchestrating Parametric Factory...</p>
+                <p class="sub-text">Running 8760-hour EnergyPlus Simulation with your Multi-Floor geometry. This usually takes 60 seconds.</p>
+            </div>
+
+            <div id="results-state" class="hidden">
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <h3>Baseline State</h3>
+                        <div class="energy-class-badge" id="badge-baseline">Class --</div>
+                        <p id="kpi-baseline-demand" class="kpi-val">-- kWh/yr</p>
+                        <p id="kpi-baseline-spec" class="kpi-sub">-- kWh/(m²·a)</p>
+                    </div>
+                    <div class="kpi-card highlight">
+                        <h3>Post-Renovation Target</h3>
+                        <div class="energy-class-badge" id="badge-renovated">Class --</div>
+                        <p id="kpi-renovated-demand" class="kpi-val">-- kWh/yr</p>
+                        <p id="kpi-renovated-spec" class="kpi-sub">-- kWh/(m²·a)</p>
+                    </div>
+                    <div class="kpi-card">
+                        <h3>Yearly Energy Bill</h3>
+                        <p id="kpi-cost" class="kpi-val">€ --</p>
+                    </div>
+                    <div class="kpi-card highlight">
+                        <h3>Annual Savings</h3>
+                        <p id="kpi-savings" class="kpi-val glow-text">€ --</p>
+                    </div>
+                    <div class="kpi-card green-highlight" style="grid-column: span 2;">
+                        <h3>CO₂ Reduction</h3>
+                        <p id="kpi-co2" class="kpi-val glow-text-green">-- kg</p>
+                    </div>
+                </div>
+
+                <div class="schematic-viewer">
+                    <h3>Building 3D Schematic</h3>
+                    <iframe id="schematic-img" src="" style="width:100%; height:500px; border:none; border-radius:12px;"></iframe>
+                </div>
+            </div>
+            
+            <div id="welcome-state">
+                <p>Set up your floors and zones, upload your facade, configure standards, and click <b>Run AI Simulation</b>.</p>
+            </div>
+        </div>
+    </div>
+    <script src="main.js"></script>
+</body>
+</html>
